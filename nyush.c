@@ -3,10 +3,6 @@
 #include <string.h>
 #include <unistd.h>
 
-/*
- * print_prompt - prints the shell prompt in the format: [nyush basename]$ 
- * If cwd is "/", basename is "/". Otherwise it's the last component.
- */
 static void print_prompt(void)
 {
     char cwd[1024];
@@ -33,6 +29,24 @@ static void print_prompt(void)
 
 int main(void)
 {
-    print_prompt();
+    char *line = NULL;
+    size_t len = 0;
+
+    while (1) {
+        print_prompt();
+
+        if (getline(&line, &len, stdin) == -1) {
+            break; 
+        }
+
+        line[strcspn(line, "\n")] = '\0';
+
+        if (line[0] == '\0') {
+            continue;
+        }
+
+    }
+
+    free(line);
     return 0;
 }
