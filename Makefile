@@ -1,9 +1,13 @@
-.PHONY: all clean
+CC=gcc
+CFLAGS=-g -pedantic -std=gnu17 -Wall -Werror -Wextra
 
+.PHONY: all
 all: nyush
 
-nyush: nyush.c
-	gcc -std=c17 -Wall -Werror -pedantic -o nyush nyush.c
+nyush: nyush.o
 
+nyush.o: nyush.c
+
+.PHONY: clean
 clean:
-	rm -f nyush
+	rm -f *.o nyush

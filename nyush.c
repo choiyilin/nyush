@@ -79,7 +79,7 @@ int main(void)
             continue;
         }
 
-        /* Built-in: exit */
+        //exit built in here
         if (strcmp(args[0], "exit") == 0) {
             if (argc != 1) {
                 fprintf(stderr, "Error: invalid command\n");
@@ -107,7 +107,7 @@ int main(void)
             perror("fork");
             continue;
         } else if (pid == 0) {
-            /* Child resets signal handlers to default. */
+            // reset sig handlers to default in CHILD
             signal(SIGINT, SIG_DFL);
             signal(SIGQUIT, SIG_DFL);
             signal(SIGTSTP, SIG_DFL);
