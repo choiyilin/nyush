@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <signal.h>
 
 static void print_prompt(void)
 {
@@ -32,6 +33,11 @@ static void print_prompt(void)
 
 int main(void)
 {
+    /* Shell ignores these signals; children will reset to default. */
+    signal(SIGINT, SIG_IGN);
+    signal(SIGQUIT, SIG_IGN);
+    signal(SIGTSTP, SIG_IGN);
+
     char *line = NULL;
     size_t len = 0;
 
@@ -63,6 +69,27 @@ int main(void)
             continue;
         }
 
+        /* Built-in: cd <dir> */
+        if (strcmp(args[0], "cd") == 0) {
+            if (argc != 2) {
+                fprintf(stderr, "Error: invalid command\n");
+            } else if (chdir(args[1]) != 0) {
+                fprintf(stderr, "Error: invalid directory\n");
+            }
+            continue;
+        }
+
+        /* Built-in: exit */
+        if (strcmp(args[0], "exit") == 0) {
+            if (argc != 1) {
+                fprintf(stderr, "Error: invalid command\n");
+                continue;
+            }
+            /* TODO: check for suspended jobs in Milestone 10 */
+            free(line);
+            exit(0);
+        }
+
         /* Resolve program path based on the command name (args[0]):
          *   - starts with '/' -> absolute path
          *   - contains '/'   -> relative path
@@ -80,6 +107,11 @@ int main(void)
             perror("fork");
             continue;
         } else if (pid == 0) {
+            /* Child resets signal handlers to default. */
+            signal(SIGINT, SIG_DFL);
+            signal(SIGQUIT, SIG_DFL);
+            signal(SIGTSTP, SIG_DFL);
+
             args[0] = prog;
             execv(prog, args);
             fprintf(stderr, "Error: invalid program\n");
