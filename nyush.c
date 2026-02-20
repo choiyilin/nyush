@@ -20,7 +20,7 @@ static void print_prompt(void)
     } else {
         basename = strrchr(cwd, '/');
         if (basename != NULL) {
-            basename++; /* skip the '/' */
+            basename++; //skip /
         } else {
             basename = cwd;
         }
@@ -39,7 +39,7 @@ int main(void)
         print_prompt();
 
         if (getline(&line, &len, stdin) == -1) {
-            break; 
+            break;
         }
 
         line[strcspn(line, "\n")] = '\0';
@@ -48,16 +48,31 @@ int main(void)
             continue;
         }
 
-        /* Resolve the program path:
-         *   - starts with '/' -> absolute path, use as-is
-         *   - contains '/'   -> relative path, use as-is
+        /* Tokenize the line into arguments using strtok_r. */
+        char *args[128];
+        int argc = 0;
+        char *saveptr;
+        char *token = strtok_r(line, " ", &saveptr);
+        while (token != NULL && argc < 127) {
+            args[argc++] = token;
+            token = strtok_r(NULL, " ", &saveptr);
+        }
+        args[argc] = NULL;
+
+        if (argc == 0) {
+            continue;
+        }
+
+        /* Resolve program path based on the command name (args[0]):
+         *   - starts with '/' -> absolute path
+         *   - contains '/'   -> relative path
          *   - otherwise       -> prepend /usr/bin/
          */
         char prog[1024];
-        if (line[0] == '/' || strchr(line, '/') != NULL) {
-            snprintf(prog, sizeof(prog), "%s", line);
+        if (args[0][0] == '/' || strchr(args[0], '/') != NULL) {
+            snprintf(prog, sizeof(prog), "%s", args[0]);
         } else {
-            snprintf(prog, sizeof(prog), "/usr/bin/%s", line);
+            snprintf(prog, sizeof(prog), "/usr/bin/%s", args[0]);
         }
 
         pid_t pid = fork();
@@ -65,13 +80,11 @@ int main(void)
             perror("fork");
             continue;
         } else if (pid == 0) {
-            /* Child: exec the program (no arguments yet). */
-            char *argv[] = {prog, NULL};
-            execv(prog, argv);
+            args[0] = prog;
+            execv(prog, args);
             fprintf(stderr, "Error: invalid program\n");
             _exit(1);
         } else {
-            /* Parent: wait for the child to finish. */
             int status;
             waitpid(pid, &status, 0);
         }
