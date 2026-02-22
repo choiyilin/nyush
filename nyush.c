@@ -6,6 +6,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <fcntl.h>
 
 static void print_prompt(void)
 {
@@ -85,16 +86,36 @@ int main(void)
                 fprintf(stderr, "Error: invalid command\n");
                 continue;
             }
-            /* TODO: check for suspended jobs in Milestone 10 */
+            //need to impliment job ctrl
             free(line);
             exit(0);
         }
 
-        /* Resolve program path based on the command name (args[0]):
-         *   - starts with '/' -> absolute path
-         *   - contains '/'   -> relative path
-         *   - otherwise       -> prepend /usr/bin/
-         */
+        // Parse output redirection: > or >> followed by a filename.         
+        char *outfile = NULL;
+        int append = 0;
+        for (int i = 0; i < argc; i++) {
+            if (strcmp(args[i], ">>") == 0 || strcmp(args[i], ">") == 0) {
+                append = (strcmp(args[i], ">>") == 0);
+                if (i + 1 >= argc) {
+                    fprintf(stderr, "Error: invalid command\n");
+                    outfile = NULL;
+                    goto next_cmd;
+                }
+                outfile = args[i + 1];
+                for (int j = i; j + 2 <= argc; j++) {
+                    args[j] = args[j + 2];
+                }
+                argc -= 2;
+                break;
+            }
+        }
+
+        if (argc == 0) {
+            fprintf(stderr, "Error: invalid command\n");
+            continue;
+        }
+
         char prog[1024];
         if (args[0][0] == '/' || strchr(args[0], '/') != NULL) {
             snprintf(prog, sizeof(prog), "%s", args[0]);
@@ -107,10 +128,23 @@ int main(void)
             perror("fork");
             continue;
         } else if (pid == 0) {
-            // reset sig handlers to default in CHILD
+            // reset sig handlers to default in child
             signal(SIGINT, SIG_DFL);
             signal(SIGQUIT, SIG_DFL);
             signal(SIGTSTP, SIG_DFL);
+
+            // output redirection in child
+            if (outfile != NULL) {
+                int flags = O_WRONLY | O_CREAT;
+                flags |= append ? O_APPEND : O_TRUNC;
+                int fd = open(outfile, flags, 0644);
+                if (fd < 0) {
+                    fprintf(stderr, "Error: invalid file\n");
+                    _exit(1);
+                }
+                dup2(fd, STDOUT_FILENO);
+                close(fd);
+            }
 
             args[0] = prog;
             execv(prog, args);
@@ -120,6 +154,8 @@ int main(void)
             int status;
             waitpid(pid, &status, 0);
         }
+
+        next_cmd: ;
 
     }
 
