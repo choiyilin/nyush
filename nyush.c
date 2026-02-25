@@ -91,24 +91,41 @@ int main(void)
             exit(0);
         }
 
-        // Parse output redirection: > or >> followed by a filename.         
+        // Parse redirection tokens: <, >, >>.
+        char *infile = NULL;
         char *outfile = NULL;
         int append = 0;
-        for (int i = 0; i < argc; i++) {
-            if (strcmp(args[i], ">>") == 0 || strcmp(args[i], ">") == 0) {
-                append = (strcmp(args[i], ">>") == 0);
+        for (int i = 0; i < argc; ) {
+            if (strcmp(args[i], "<") == 0 ||
+                strcmp(args[i], ">") == 0 ||
+                strcmp(args[i], ">>") == 0) {
                 if (i + 1 >= argc) {
                     fprintf(stderr, "Error: invalid command\n");
-                    outfile = NULL;
                     goto next_cmd;
                 }
-                outfile = args[i + 1];
+
+                if (strcmp(args[i], "<") == 0) {
+                    if (infile != NULL) {
+                        fprintf(stderr, "Error: invalid command\n");
+                        goto next_cmd;
+                    }
+                    infile = args[i + 1];
+                } else {
+                    if (outfile != NULL) {
+                        fprintf(stderr, "Error: invalid command\n");
+                        goto next_cmd;
+                    }
+                    append = (strcmp(args[i], ">>") == 0);
+                    outfile = args[i + 1];
+                }
+
                 for (int j = i; j + 2 <= argc; j++) {
                     args[j] = args[j + 2];
                 }
                 argc -= 2;
-                break;
+                continue;
             }
+            i++;
         }
 
         if (argc == 0) {
@@ -132,6 +149,17 @@ int main(void)
             signal(SIGINT, SIG_DFL);
             signal(SIGQUIT, SIG_DFL);
             signal(SIGTSTP, SIG_DFL);
+
+            // input redirection in child
+            if (infile != NULL) {
+                int fd = open(infile, O_RDONLY);
+                if (fd < 0) {
+                    fprintf(stderr, "Error: invalid file\n");
+                    _exit(1);
+                }
+                dup2(fd, STDIN_FILENO);
+                close(fd);
+            }
 
             // output redirection in child
             if (outfile != NULL) {
