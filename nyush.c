@@ -69,127 +69,116 @@ int main(void)
             continue;
         }
 
-        int pipe_idx = -1;
+        int pipe_count = 0;
         for (int i = 0; i < argc; i++) {
             if (strcmp(args[i], "|") == 0) {
-                if (pipe_idx != -1) {
-                    fprintf(stderr, "Error: invalid command\n");
-                    goto next_cmd;
-                }
-                pipe_idx = i;
+                pipe_count++;
             }
         }
 
-        if (pipe_idx != -1) {
-            if (pipe_idx == 0 || pipe_idx == argc - 1) {
-                fprintf(stderr, "Error: invalid command\n");
-                goto next_cmd;
-            }
+        if (pipe_count > 0) {
+            int cmd_count = pipe_count + 1;
+            char *cmd_args[128][128];
+            int cmd_argc[128] = {0};
+            char prog_paths[128][1024];
 
-            char *left_args[128];
-            char *right_args[128];
-            int left_argc = 0;
-            int right_argc = 0;
+            int cmd_idx = 0;
+            for (int i = 0; i < argc; i++) {
+                if (strcmp(args[i], "|") == 0) {
+                    if (cmd_argc[cmd_idx] == 0) {
+                        fprintf(stderr, "Error: invalid command\n");
+                        goto next_cmd;
+                    }
+                    cmd_args[cmd_idx][cmd_argc[cmd_idx]] = NULL;
+                    cmd_idx++;
+                    if (cmd_idx >= cmd_count) {
+                        fprintf(stderr, "Error: invalid command\n");
+                        goto next_cmd;
+                    }
+                    continue;
+                }
 
-            for (int i = 0; i < pipe_idx; i++) {
-                left_args[left_argc++] = args[i];
-            }
-            left_args[left_argc] = NULL;
-
-            for (int i = pipe_idx + 1; i < argc; i++) {
-                right_args[right_argc++] = args[i];
-            }
-            right_args[right_argc] = NULL;
-
-//built-ins cannot be piped
-            if (strcmp(left_args[0], "cd") == 0 || strcmp(left_args[0], "exit") == 0 ||
-                strcmp(right_args[0], "cd") == 0 || strcmp(right_args[0], "exit") == 0) {
-                fprintf(stderr, "Error: invalid command\n");
-                goto next_cmd;
-            }
-
-//no redirection
-            for (int i = 0; i < left_argc; i++) {
-                if (strcmp(left_args[i], "<") == 0 || strcmp(left_args[i], ">") == 0 ||
-                    strcmp(left_args[i], ">>") == 0 || strcmp(left_args[i], "|") == 0) {
+                /* Milestone 9: support pipelines only (no redirection in pipe yet). */
+                if (strcmp(args[i], "<") == 0 || strcmp(args[i], ">") == 0 ||
+                    strcmp(args[i], ">>") == 0) {
                     fprintf(stderr, "Error: invalid command\n");
                     goto next_cmd;
                 }
+                cmd_args[cmd_idx][cmd_argc[cmd_idx]++] = args[i];
             }
-            for (int i = 0; i < right_argc; i++) {
-                if (strcmp(right_args[i], "<") == 0 || strcmp(right_args[i], ">") == 0 ||
-                    strcmp(right_args[i], ">>") == 0 || strcmp(right_args[i], "|") == 0) {
+
+            if (cmd_idx != cmd_count - 1 || cmd_argc[cmd_idx] == 0) {
+                fprintf(stderr, "Error: invalid command\n");
+                goto next_cmd;
+            }
+            cmd_args[cmd_idx][cmd_argc[cmd_idx]] = NULL;
+
+            for (int i = 0; i < cmd_count; i++) {
+                /* Built-ins cannot be piped. */
+                if (strcmp(cmd_args[i][0], "cd") == 0 || strcmp(cmd_args[i][0], "exit") == 0) {
                     fprintf(stderr, "Error: invalid command\n");
+                    goto next_cmd;
+                }
+
+                if (cmd_args[i][0][0] == '/' || strchr(cmd_args[i][0], '/') != NULL) {
+                    snprintf(prog_paths[i], sizeof(prog_paths[i]), "%s", cmd_args[i][0]);
+                } else {
+                    snprintf(prog_paths[i], sizeof(prog_paths[i]), "/usr/bin/%s", cmd_args[i][0]);
+                }
+            }
+
+            int pipes[127][2];
+            for (int i = 0; i < cmd_count - 1; i++) {
+                if (pipe(pipes[i]) < 0) {
+                    perror("pipe");
                     goto next_cmd;
                 }
             }
 
-            char left_prog[1024];
-            char right_prog[1024];
-            if (left_args[0][0] == '/' || strchr(left_args[0], '/') != NULL) {
-                snprintf(left_prog, sizeof(left_prog), "%s", left_args[0]);
-            } else {
-                snprintf(left_prog, sizeof(left_prog), "/usr/bin/%s", left_args[0]);
-            }
-            if (right_args[0][0] == '/' || strchr(right_args[0], '/') != NULL) {
-                snprintf(right_prog, sizeof(right_prog), "%s", right_args[0]);
-            } else {
-                snprintf(right_prog, sizeof(right_prog), "/usr/bin/%s", right_args[0]);
-            }
+            pid_t pids[128];
+            for (int i = 0; i < cmd_count; i++) {
+                pids[i] = fork();
+                if (pids[i] < 0) {
+                    perror("fork");
+                    for (int k = 0; k < cmd_count - 1; k++) {
+                        close(pipes[k][0]);
+                        close(pipes[k][1]);
+                    }
+                    for (int k = 0; k < i; k++) {
+                        waitpid(pids[k], NULL, 0);
+                    }
+                    goto next_cmd;
+                } else if (pids[i] == 0) {
+                    signal(SIGINT, SIG_DFL);
+                    signal(SIGQUIT, SIG_DFL);
+                    signal(SIGTSTP, SIG_DFL);
 
-            int pipefd[2];
-            if (pipe(pipefd) < 0) {
-                perror("pipe");
-                goto next_cmd;
-            }
+                    if (i > 0) {
+                        dup2(pipes[i - 1][0], STDIN_FILENO);
+                    }
+                    if (i < cmd_count - 1) {
+                        dup2(pipes[i][1], STDOUT_FILENO);
+                    }
 
-            pid_t p1 = fork();
-            if (p1 < 0) {
-                perror("fork");
-                close(pipefd[0]);
-                close(pipefd[1]);
-                goto next_cmd;
-            } else if (p1 == 0) {
-                signal(SIGINT, SIG_DFL);
-                signal(SIGQUIT, SIG_DFL);
-                signal(SIGTSTP, SIG_DFL);
+                    for (int k = 0; k < cmd_count - 1; k++) {
+                        close(pipes[k][0]);
+                        close(pipes[k][1]);
+                    }
 
-                dup2(pipefd[1], STDOUT_FILENO);
-                close(pipefd[0]);
-                close(pipefd[1]);
-
-                left_args[0] = left_prog;
-                execv(left_prog, left_args);
-                fprintf(stderr, "Error: invalid program\n");
-                _exit(1);
+                    cmd_args[i][0] = prog_paths[i];
+                    execv(prog_paths[i], cmd_args[i]);
+                    fprintf(stderr, "Error: invalid program\n");
+                    _exit(1);
+                }
             }
 
-            pid_t p2 = fork();
-            if (p2 < 0) {
-                perror("fork");
-                close(pipefd[0]);
-                close(pipefd[1]);
-                waitpid(p1, NULL, 0);
-                goto next_cmd;
-            } else if (p2 == 0) {
-                signal(SIGINT, SIG_DFL);
-                signal(SIGQUIT, SIG_DFL);
-                signal(SIGTSTP, SIG_DFL);
-
-                dup2(pipefd[0], STDIN_FILENO);
-                close(pipefd[0]);
-                close(pipefd[1]);
-
-                right_args[0] = right_prog;
-                execv(right_prog, right_args);
-                fprintf(stderr, "Error: invalid program\n");
-                _exit(1);
+            for (int i = 0; i < cmd_count - 1; i++) {
+                close(pipes[i][0]);
+                close(pipes[i][1]);
             }
-
-            close(pipefd[0]);
-            close(pipefd[1]);
-            waitpid(p1, NULL, 0);
-            waitpid(p2, NULL, 0);
+            for (int i = 0; i < cmd_count; i++) {
+                waitpid(pids[i], NULL, 0);
+            }
             goto next_cmd;
         }
 
