@@ -125,6 +125,9 @@ int main(void)
             char *cmd_args[128][128];
             int cmd_argc[128] = {0};
             char prog_paths[128][1024];
+            char *infile = NULL;
+            char *outfile = NULL;
+            int append = 0;
 
             int cmd_idx = 0;
             for (int i = 0; i < argc; i++) {
@@ -142,11 +145,6 @@ int main(void)
                     continue;
                 }
 
-                if (strcmp(args[i], "<") == 0 || strcmp(args[i], ">") == 0 ||
-                    strcmp(args[i], ">>") == 0) {
-                    fprintf(stderr, "Error: invalid command\n");
-                    goto next_cmd;
-                }
                 cmd_args[cmd_idx][cmd_argc[cmd_idx]++] = args[i];
             }
 
@@ -154,10 +152,48 @@ int main(void)
                 fprintf(stderr, "Error: invalid command\n");
                 goto next_cmd;
             }
-            cmd_args[cmd_idx][cmd_argc[cmd_idx]] = NULL;
+
+            // Parse redirections inside each pipeline segment.
+            for (int c = 0; c < cmd_count; c++) {
+                for (int i = 0; i < cmd_argc[c]; ) {
+                    if (strcmp(cmd_args[c][i], "<") == 0) {
+                        if (c != 0 || infile != NULL || i + 1 >= cmd_argc[c]) {
+                            fprintf(stderr, "Error: invalid command\n");
+                            goto next_cmd;
+                        }
+                        infile = cmd_args[c][i + 1];
+                        for (int j = i; j + 2 <= cmd_argc[c]; j++) {
+                            cmd_args[c][j] = cmd_args[c][j + 2];
+                        }
+                        cmd_argc[c] -= 2;
+                        continue;
+                    }
+
+                    if (strcmp(cmd_args[c][i], ">") == 0 || strcmp(cmd_args[c][i], ">>") == 0) {
+                        if (c != cmd_count - 1 || outfile != NULL || i + 1 >= cmd_argc[c]) {
+                            fprintf(stderr, "Error: invalid command\n");
+                            goto next_cmd;
+                        }
+                        append = (strcmp(cmd_args[c][i], ">>") == 0);
+                        outfile = cmd_args[c][i + 1];
+                        for (int j = i; j + 2 <= cmd_argc[c]; j++) {
+                            cmd_args[c][j] = cmd_args[c][j + 2];
+                        }
+                        cmd_argc[c] -= 2;
+                        continue;
+                    }
+                    i++;
+                }
+
+                if (cmd_argc[c] == 0) {
+                    fprintf(stderr, "Error: invalid command\n");
+                    goto next_cmd;
+                }
+                cmd_args[c][cmd_argc[c]] = NULL;
+            }
 
             for (int i = 0; i < cmd_count; i++) {
-                /* Built-ins cannot be piped. */
+                // Built ins cannot be piped.
                 if (strcmp(cmd_args[i][0], "cd") == 0 || strcmp(cmd_args[i][0], "exit") == 0 ||
                     strcmp(cmd_args[i][0], "jobs") == 0 || strcmp(cmd_args[i][0], "fg") == 0) {
                     fprintf(stderr, "Error: invalid command\n");
@@ -207,6 +243,27 @@ int main(void)
                     for (int k = 0; k < cmd_count - 1; k++) {
                         close(pipes[k][0]);
                         close(pipes[k][1]);
+                    }
+
+                    if (i == 0 && infile != NULL) {
+                        int fd = open(infile, O_RDONLY);
+                        if (fd < 0) {
+                            fprintf(stderr, "Error: invalid file\n");
+                            _exit(1);
+                        }
+                        dup2(fd, STDIN_FILENO);
+                        close(fd);
+                    }
+                    if (i == cmd_count - 1 && outfile != NULL) {
+                        int flags = O_WRONLY | O_CREAT;
+                        flags |= append ? O_APPEND : O_TRUNC;
+                        int fd = open(outfile, flags, 0644);
+                        if (fd < 0) {
+                            fprintf(stderr, "Error: invalid file\n");
+                            _exit(1);
+                        }
+                        dup2(fd, STDOUT_FILENO);
+                        close(fd);
                     }
 
                     cmd_args[i][0] = prog_paths[i];
