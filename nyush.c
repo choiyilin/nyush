@@ -7,6 +7,49 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <fcntl.h>
+#include <ctype.h>
+
+#define MAX_JOBS 100
+#define MAX_CMD_LEN 1000
+
+struct Job {
+    pid_t pid;
+    char cmd[MAX_CMD_LEN + 1];
+};
+
+static struct Job jobs[MAX_JOBS];
+static int jobs_count = 0;
+
+static void add_job(pid_t pid, const char *cmd)
+{
+    if (jobs_count >= MAX_JOBS) {
+        return;
+    }
+    jobs[jobs_count].pid = pid;
+    snprintf(jobs[jobs_count].cmd, sizeof(jobs[jobs_count].cmd), "%s", cmd);
+    jobs_count++;
+}
+
+static void remove_job_at(int idx)
+{
+    for (int i = idx; i + 1 < jobs_count; i++) {
+        jobs[i] = jobs[i + 1];
+    }
+    jobs_count--;
+}
+
+static int is_valid_index_arg(const char *s)
+{
+    if (s == NULL || s[0] == '\0') {
+        return 0;
+    }
+    for (int i = 0; s[i] != '\0'; i++) {
+        if (!isdigit((unsigned char)s[i])) {
+            return 0;
+        }
+    }
+    return 1;
+}
 
 static void print_prompt(void)
 {
@@ -34,7 +77,6 @@ static void print_prompt(void)
 
 int main(void)
 {
-    /* Shell ignores these signals; children will reset to default. */
     signal(SIGINT, SIG_IGN);
     signal(SIGQUIT, SIG_IGN);
     signal(SIGTSTP, SIG_IGN);
@@ -50,6 +92,8 @@ int main(void)
         }
 
         line[strcspn(line, "\n")] = '\0';
+        char original_cmd[MAX_CMD_LEN + 1];
+        snprintf(original_cmd, sizeof(original_cmd), "%s", line);
 
         if (line[0] == '\0') {
             continue;
@@ -98,7 +142,6 @@ int main(void)
                     continue;
                 }
 
-                /* Milestone 9: support pipelines only (no redirection in pipe yet). */
                 if (strcmp(args[i], "<") == 0 || strcmp(args[i], ">") == 0 ||
                     strcmp(args[i], ">>") == 0) {
                     fprintf(stderr, "Error: invalid command\n");
@@ -115,7 +158,8 @@ int main(void)
 
             for (int i = 0; i < cmd_count; i++) {
                 /* Built-ins cannot be piped. */
-                if (strcmp(cmd_args[i][0], "cd") == 0 || strcmp(cmd_args[i][0], "exit") == 0) {
+                if (strcmp(cmd_args[i][0], "cd") == 0 || strcmp(cmd_args[i][0], "exit") == 0 ||
+                    strcmp(cmd_args[i][0], "jobs") == 0 || strcmp(cmd_args[i][0], "fg") == 0) {
                     fprintf(stderr, "Error: invalid command\n");
                     goto next_cmd;
                 }
@@ -177,7 +221,8 @@ int main(void)
                 close(pipes[i][1]);
             }
             for (int i = 0; i < cmd_count; i++) {
-                waitpid(pids[i], NULL, 0);
+                int st;
+                waitpid(pids[i], &st, WUNTRACED);
             }
             goto next_cmd;
         }
@@ -191,13 +236,60 @@ int main(void)
             continue;
         }
 
-        //exit built in here
+        if (strcmp(args[0], "jobs") == 0) {
+            if (argc != 1) {
+                fprintf(stderr, "Error: invalid command\n");
+                continue;
+            }
+            for (int i = 0; i < jobs_count; i++) {
+                printf("[%d] %s\n", i + 1, jobs[i].cmd);
+            }
+            continue;
+        }
+
+        if (strcmp(args[0], "fg") == 0) {
+            if (argc != 2) {
+                fprintf(stderr, "Error: invalid command\n");
+                continue;
+            }
+            if (!is_valid_index_arg(args[1])) {
+                fprintf(stderr, "Error: invalid job\n");
+                continue;
+            }
+
+            int idx = atoi(args[1]);
+            if (idx <= 0 || idx > jobs_count) {
+                fprintf(stderr, "Error: invalid job\n");
+                continue;
+            }
+
+            idx -= 1;
+            pid_t pid = jobs[idx].pid;
+            char cmd_copy[MAX_CMD_LEN + 1];
+            snprintf(cmd_copy, sizeof(cmd_copy), "%s", jobs[idx].cmd);
+            remove_job_at(idx);
+
+            if (kill(pid, SIGCONT) != 0) {
+                continue;
+            }
+
+            int status;
+            waitpid(pid, &status, WUNTRACED);
+            if (WIFSTOPPED(status)) {
+                add_job(pid, cmd_copy);
+            }
+            continue;
+        }
+
         if (strcmp(args[0], "exit") == 0) {
             if (argc != 1) {
                 fprintf(stderr, "Error: invalid command\n");
                 continue;
             }
-            //need to impliment job ctrl
+            if (jobs_count > 0) {
+                fprintf(stderr, "Error: there are suspended jobs\n");
+                continue;
+            }
             free(line);
             exit(0);
         }
@@ -291,7 +383,10 @@ int main(void)
             _exit(1);
         } else {
             int status;
-            waitpid(pid, &status, 0);
+            waitpid(pid, &status, WUNTRACED);
+            if (WIFSTOPPED(status)) {
+                add_job(pid, original_cmd);
+            }
         }
 
         next_cmd: ;
